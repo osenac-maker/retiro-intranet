@@ -257,7 +257,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="page-prospects" class="page">
   <div class="ph">
     <div class="ph-left"><h2>Prospects</h2><p>Votre pipeline commercial RETIRO</p></div>
-    <button class="btn btn-navy" onclick="nav('simulator')">+ Nouvelle simulation</button>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-out btn-sm" onclick="importAT()">☁️ Sync Airtable</button>
+      <button class="btn btn-navy" onclick="nav('simulator')">+ Nouvelle simulation</button>
+    </div>
   </div>
   <div class="pc">
     <input id="q-p" type="text" placeholder="🔍 Rechercher…" style="width:320px;padding:8px 12px;border:1.5px solid #E2E8F0;border-radius:6px;font-size:13px;margin-bottom:12px;" oninput="renderProspects()">
@@ -329,6 +332,24 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
       </div>
     </div>
     <div class="card" style="max-width:560px;">
+      <div class="ch"><h3>🔗 Synchronisation Airtable</h3></div>
+      <div class="cb">
+        <div class="fgrp">
+          <label>Token API personnel <span style="font-weight:400;color:var(--slate-lt)">— airtable.com/create/tokens</span></label>
+          <input id="s-at-token" type="password" placeholder="patXXXXXXXX…" oninput="saveSett()">
+        </div>
+        <div class="frow">
+          <div class="fgrp"><label>Base ID</label><input id="s-at-base" placeholder="appXXXXXXXX" oninput="saveSett()"></div>
+          <div class="fgrp"><label>Nom de la table</label><input id="s-at-table" placeholder="Leads" oninput="saveSett()"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <button class="btn btn-navy btn-sm" onclick="importAT()">☁️ Importer depuis Airtable</button>
+          <button class="btn btn-out btn-sm" onclick="testAT()">🔍 Tester la connexion</button>
+        </div>
+        <div class="alert a-green" id="at-ok" style="display:none;margin-top:10px;"></div>
+      </div>
+    </div>
+    <div class="card" style="max-width:560px;">
       <div class="ch"><h3>Données locales</h3></div>
       <div class="cb">
         <p style="font-size:13px;margin-bottom:14px;">Toutes les données sont stockées dans votre navigateur (localStorage). Aucun serveur externe.</p>
@@ -378,7 +399,8 @@ const S = {
   chart: null,
   sett: {
     name:'Olivier SENAC', role:'Manager Associé', orias:'', phone:'06 22 82 88 44',
-    email:'', company:'RETIRO Patrimoine', ra:64, fee:0.9
+    email:'', company:'RETIRO Patrimoine', ra:64, fee:0.9,
+    at:{ token:'', base:'applfZMfulVhjtyay', table:'Leads' }
   }
 };
 
@@ -545,6 +567,101 @@ function calcSim(){
 }
 
 // ══════════════════════════════════════════════════════════
+// AIRTABLE SYNC
+// ══════════════════════════════════════════════════════════
+function atCfg(){ return S.sett.at||{}; }
+function atUrl(id){
+  const c=atCfg(), base=c.base||'applfZMfulVhjtyay', tbl=encodeURIComponent(c.table||'Leads');
+  return `https://api.airtable.com/v0/${base}/${tbl}${id?'/'+id:''}`;
+}
+function atH(){ return {'Authorization':'Bearer '+(atCfg().token||''),'Content-Type':'application/json'}; }
+
+function atFields(p){
+  return {
+    'Nom': p.name,
+    'Téléphone': p.phone||'',
+    'Email': p.email||'',
+    'Âge': p.age||0,
+    'Capacité épargne mensuelle': p.mo||0,
+    'Étape': p.status||'nouveau',
+    'Économie fiscale': p.taxTot||0,
+    'Retraite estimée': p.ann||0
+  };
+}
+
+async function syncAT(p){
+  const token=atCfg().token;
+  if(!token) return;
+  try {
+    const method=p.atId?'PATCH':'POST';
+    const url=p.atId?atUrl(p.atId):atUrl();
+    const body=p.atId
+      ?JSON.stringify({fields:atFields(p)})
+      :JSON.stringify({records:[{fields:atFields(p)}]});
+    const res=await fetch(url,{method,headers:atH(),body});
+    const data=await res.json();
+    if(!res.ok) throw new Error(data.error?.message||res.status);
+    if(!p.atId){
+      const rec=data.records?.[0];
+      if(rec?.id){
+        const idx=S.prospects.findIndex(x=>x.id===p.id);
+        if(idx>=0){ S.prospects[idx].atId=rec.id; persist(); }
+      }
+    }
+    toast('☁️ Synchronisé Airtable');
+  } catch(e){ toast('⚠️ Airtable : '+e.message); }
+}
+
+async function testAT(){
+  const token=atCfg().token;
+  if(!token){ toast('⚠️ Token manquant'); return; }
+  try {
+    const res=await fetch(atUrl()+'?maxRecords=1',{headers:atH()});
+    const data=await res.json();
+    if(!res.ok) throw new Error(data.error?.message||res.status);
+    const n=data.records?.length||0;
+    const ok=document.getElementById('at-ok');
+    ok.textContent=`✓ Connexion OK — table "${atCfg().table}" accessible`;
+    ok.style.display='block'; setTimeout(()=>ok.style.display='none',4000);
+  } catch(e){ toast('⚠️ Airtable : '+e.message); }
+}
+
+async function importAT(){
+  const token=atCfg().token;
+  if(!token){ toast('⚠️ Token Airtable manquant → Paramètres'); return; }
+  toast('⏳ Import Airtable en cours…');
+  try {
+    let all=[], offset='';
+    do {
+      const res=await fetch(atUrl()+'?pageSize=100'+(offset?'&offset='+offset:''),{headers:atH()});
+      const data=await res.json();
+      if(!res.ok) throw new Error(data.error?.message||res.status);
+      all=all.concat(data.records||[]); offset=data.offset||'';
+    } while(offset);
+
+    let added=0, updated=0;
+    for(const rec of all){
+      const f=rec.fields, name=(f['Nom']||'').trim();
+      if(!name) continue;
+      const ei=S.prospects.findIndex(p=>p.atId===rec.id||p.name.toLowerCase()===name.toLowerCase());
+      const p={
+        id:ei>=0?S.prospects[ei].id:uid(), atId:rec.id,
+        name, phone:f['Téléphone']||'', email:f['Email']||'',
+        age:f['Âge']||49, ret:S.sett.ra||64, tmi:41,
+        mo:f['Capacité épargne mensuelle']||0, cu:0, fee:S.sett.fee||0.9,
+        status:f['Étape']||'nouveau',
+        capP:0, capE:0, capD:0,
+        ann:f['Retraite estimée']||0, taxTot:f['Économie fiscale']||0, realMo:0,
+        createdAt:rec.createdTime||new Date().toISOString()
+      };
+      if(ei>=0){ S.prospects[ei]=p; updated++; } else { S.prospects.unshift(p); added++; }
+    }
+    persist(); renderProspects(); renderDB();
+    toast(`☁️ ${added} importés, ${updated} mis à jour`);
+  } catch(e){ toast('⚠️ Erreur import : '+e.message); }
+}
+
+// ══════════════════════════════════════════════════════════
 // SAVE PROSPECT
 // ══════════════════════════════════════════════════════════
 function saveProspect(){
@@ -582,6 +699,7 @@ function saveProspect(){
 
   persist();
   toast(`✓ ${f.name} sauvegardé`);
+  syncAT(isUpdate ? S.prospects[S.prospects.findIndex(x=>x.id===id)] : S.prospects[0]);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -662,7 +780,7 @@ function renderProspects(){
 function updSt(id,st){
   if(!st) return;
   const p=S.prospects.find(x=>x.id===id);
-  if(p){p.status=st;persist();renderProspects();renderDB();}
+  if(p){p.status=st;persist();renderProspects();renderDB();syncAT(p);}
 }
 
 function openP(id){
@@ -767,12 +885,17 @@ function renderSett(){
   document.getElementById('s-company').value=S.sett.company;
   document.getElementById('s-ra').value=S.sett.ra;
   document.getElementById('s-fee').value=S.sett.fee;
+  const at=S.sett.at||{};
+  document.getElementById('s-at-token').value=at.token||'';
+  document.getElementById('s-at-base').value=at.base||'applfZMfulVhjtyay';
+  document.getElementById('s-at-table').value=at.table||'Leads';
 }
 function saveSett(){
   S.sett={
     name:_v('s-name'), role:_v('s-role'), orias:_v('s-orias'), phone:_v('s-phone'),
     email:_v('s-email'), company:_v('s-company'),
-    ra:_n('s-ra',64), fee:_n('s-fee',0.9)
+    ra:_n('s-ra',64), fee:_n('s-fee',0.9),
+    at:{ token:_v('s-at-token'), base:_v('s-at-base')||'applfZMfulVhjtyay', table:_v('s-at-table')||'Leads' }
   };
   persist(); renderDB();
   const ok=document.getElementById('s-ok');
