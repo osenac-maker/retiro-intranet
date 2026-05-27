@@ -576,9 +576,19 @@ function atUrl(id){
 }
 function atH(){ return {'Authorization':'Bearer '+(atCfg().token||''),'Content-Type':'application/json'}; }
 
+function splitName(full){
+  const parts=(full||'').trim().split(/\s+/);
+  if(parts.length===1) return {prenom:'', nom:parts[0]};
+  const prenom=parts[0];
+  const nom=parts.slice(1).join(' ');
+  return {prenom, nom};
+}
+
 function atFields(p){
+  const {prenom,nom}=splitName(p.name);
   return {
-    'Nom': p.name,
+    'Nom': nom,
+    'Prénom': prenom,
     'Téléphone': p.phone||'',
     'Email': p.email||'',
     'Âge': p.age||0,
@@ -641,7 +651,10 @@ async function importAT(){
 
     let added=0, updated=0;
     for(const rec of all){
-      const f=rec.fields, name=(f['Nom']||'').trim();
+      const f=rec.fields;
+      const nom=(f['Nom']||'').trim();
+      const prenom=(f['Prénom']||'').trim();
+      const name=(prenom&&nom) ? prenom+' '+nom : (prenom||nom);
       if(!name) continue;
       const ei=S.prospects.findIndex(p=>p.atId===rec.id||p.name.toLowerCase()===name.toLowerCase());
       const p={
